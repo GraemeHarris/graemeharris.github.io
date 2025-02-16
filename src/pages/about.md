@@ -10,7 +10,3 @@ I like to write things here to learn more about them. Ideally the pressure of so
 ## Me
 
 I've been tinkering with computer since I was a teen, making games and learning what makes them tick. I felt like I knew too many about the programming world and so went into electrical engineering, and then biomedical engineering. Ultimately I ended up back in front of the IDE - though I've never lost my passion for making electronics leak their magic smoke, I am always learning and stubbing my toe against reality.
-
-<div>
-  <img src="/assets/dev.svg" class="sm:w-1/2 mx-auto" alt="coding dev illustration">
-</div>
