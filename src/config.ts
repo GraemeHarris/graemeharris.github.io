@@ -31,14 +31,8 @@ export const SOCIALS: SocialObjects = [
     active: true,
   },
   {
-    name: "LinkedIn",
-    href: "https://www.linkedin.com/in/graeme-harris",
-    linkTitle: `${SITE.title} on LinkedIn`,
-    active: true,
-  },
-  {
     name: "Mail",
-    href: "mailto:harris.graemeza@gmail.com",
+    href: "mailto:harris[dot]graemeza[at]gmail[dot]com",
     linkTitle: `Send an email to ${SITE.title}`,
     active: true,
   },
@@ -46,6 +40,12 @@ export const SOCIALS: SocialObjects = [
     name: "Twitter",
     href: "https://x.com/GesturingMan",
     linkTitle: `${SITE.title} on Twitter`,
+    active: true,
+  },
+  {
+    name: "BlueSky",
+    href: "https://bsky.app/profile/graemeharris.bsky.social",
+    linkTitle: `${SITE.title} on BlueSky`,
     active: true,
   },
 ];
