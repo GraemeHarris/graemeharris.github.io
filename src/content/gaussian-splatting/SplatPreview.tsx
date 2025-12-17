@@ -1,25 +1,10 @@
-import { useRef, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Canvas } from "@react-three/fiber";
-import {
-  OrbitControls,
-  PerspectiveCamera,
-  KeyboardControls,
-} from "@react-three/drei";
+import { OrbitControls, PerspectiveCamera } from "@react-three/drei";
 import * as THREE from "three";
 import { Vector3, Matrix4 } from "three";
 
-interface GaussianProps {
-  position: [number, number, number];
-  scale: [number, number, number];
-  rotation: [number, number, number];
-  color: string;
-  selected: boolean;
-  onSelect: () => void;
-  onMove?: (delta: [number, number, number]) => void;
-}
-
-interface Splat2DProps extends Omit<GaussianProps, "onSelect" | "onMove"> {}
-
+// Types
 interface Gaussian {
   position: [number, number, number];
   scale: [number, number, number];
@@ -27,289 +12,61 @@ interface Gaussian {
   color: string;
 }
 
-interface CameraControlsProps {
+interface CameraPreset {
+  name: string;
   position: [number, number, number];
   lookAt: [number, number, number];
-  onChange: (
-    position: [number, number, number],
-    lookAt: [number, number, number]
-  ) => void;
-  selectedIndex: number | null;
-  gaussians: Gaussian[];
 }
 
-// At the top of the file, define the controls map
-const controls = [
-  { name: "left", keys: ["ArrowLeft"] },
-  { name: "right", keys: ["ArrowRight"] },
-  { name: "up", keys: ["ArrowUp"] },
-  { name: "down", keys: ["ArrowDown"] },
+// Constants - positions chosen to avoid gimbal lock and show meaningful projections
+const CAMERA_PRESETS: CameraPreset[] = [
+  { name: "Front", position: [0, 1, 6], lookAt: [0, 0, 0] },
+  { name: "Side", position: [6, 1, 1], lookAt: [0, 0, 0] },
+  { name: "Above", position: [2, 5, 2], lookAt: [0, 0, 0] },
+  { name: "Corner", position: [3, 1, 3], lookAt: [0, 0, 0] },
 ];
 
-function CameraFrustum({
-  position,
-  lookAt,
-  fov = 75,
-  aspect = 1,
-  near = 0.1,
-  far = 10,
-}: {
-  position: [number, number, number];
-  lookAt: [number, number, number];
-  fov?: number;
-  aspect?: number;
-  near?: number;
-  far?: number;
-}) {
-  // Calculate frustum corners
-  const frustumGeometry = useMemo(() => {
-    const halfFovRad = (fov * Math.PI) / 360;
-    const nearHeight = 2 * Math.tan(halfFovRad) * near;
-    const nearWidth = nearHeight * aspect;
-    const farHeight = 2 * Math.tan(halfFovRad) * far;
-    const farWidth = farHeight * aspect;
-
-    // Create vertices for frustum corners
-    const vertices = new Float32Array([
-      // near plane corners
-      -nearWidth / 2,
-      -nearHeight / 2,
-      -near,
-      nearWidth / 2,
-      -nearHeight / 2,
-      -near,
-      nearWidth / 2,
-      nearHeight / 2,
-      -near,
-      -nearWidth / 2,
-      nearHeight / 2,
-      -near,
-
-      // far plane corners
-      -farWidth / 2,
-      -farHeight / 2,
-      -far,
-      farWidth / 2,
-      -farHeight / 2,
-      -far,
-      farWidth / 2,
-      farHeight / 2,
-      -far,
-      -farWidth / 2,
-      farHeight / 2,
-      -far,
-    ]);
-
-    // Define lines connecting corners
-    const indices = new Uint16Array([
-      // near plane
-      0, 1, 1, 2, 2, 3, 3, 0,
-      // far plane
-      4, 5, 5, 6, 6, 7, 7, 4,
-      // connecting lines
-      0, 4, 1, 5, 2, 6, 3, 7,
-    ]);
-
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute("position", new THREE.BufferAttribute(vertices, 3));
-    geometry.setIndex(new THREE.BufferAttribute(indices, 1));
-
-    return geometry;
-  }, [fov, aspect, near, far]);
-
-  // Calculate the direction vector from position to lookAt
-  const direction = useMemo(() => {
-    const pos = new THREE.Vector3(...position);
-    const target = new THREE.Vector3(...lookAt);
-    return target.sub(pos).normalize();
-  }, [position, lookAt]);
-
-  // Calculate rotation quaternion
-  const quaternion = useMemo(() => {
-    const quaternion = new THREE.Quaternion();
-    const up = new THREE.Vector3(0, 1, 0);
-    const matrix = new THREE.Matrix4();
-
-    // Create a rotation matrix that points to the target
-    matrix.lookAt(new THREE.Vector3(0, 0, 0), direction, up);
-
-    quaternion.setFromRotationMatrix(matrix);
-    return quaternion;
-  }, [direction]);
-
-  return (
-    <group position={position} quaternion={quaternion}>
-      {/* Camera body */}
-      <mesh>
-        <boxGeometry args={[0.5, 0.5, 1]} />
-        <meshBasicMaterial color="yellow" wireframe={true} />
-      </mesh>
-
-      {/* Direction cone */}
-      <mesh position={[0, 0, -0.75]}>
-        <coneGeometry args={[0.2, 0.5]} />
-        <meshBasicMaterial color="yellow" wireframe={true} />
-      </mesh>
-
-      {/* Frustum lines */}
-      <lineSegments geometry={frustumGeometry}>
-        <lineBasicMaterial color="yellow" />
-      </lineSegments>
-    </group>
-  );
-}
-
-function GaussianEllipsoid({
-  position,
-  scale,
-  rotation,
-  color,
-  selected,
-  onSelect,
-  onMove,
-}: GaussianProps) {
-  const meshRef = useRef<THREE.Mesh>(null);
-  const [hovered, setHover] = useState(false);
-
-  return (
-    <mesh
-      ref={meshRef}
-      position={position}
-      rotation={rotation}
-      scale={scale}
-      onClick={() => onSelect()}
-      onPointerOver={() => setHover(true)}
-      onPointerOut={() => setHover(false)}
-    >
-      <sphereGeometry args={[1, 32, 32]} />
-      <meshStandardMaterial
-        color={hovered ? "hotpink" : color}
-        transparent={true}
-        opacity={selected ? 0.9 : 0.5}
-        metalness={0.1}
-        roughness={0.8}
-      />
-    </mesh>
-  );
-}
-
-// Add unique IDs for keys
-const outlineIds = [
-  "outline-1",
-  "outline-2",
-  "outline-3",
-  "outline-4",
-  "outline-5",
+const INITIAL_GAUSSIANS: Gaussian[] = [
+  {
+    position: [-1, 0, 0],
+    scale: [1.5, 0.5, 0.8],
+    rotation: [0.5, 0.3, 0.1],
+    color: "#ff4444",
+  },
+  {
+    position: [1, 1, 1],
+    scale: [0.8, 1.2, 0.6],
+    rotation: [0.2, 0.4, 0.3],
+    color: "#44ff44",
+  },
+  {
+    position: [0, 0, 0],
+    scale: [0.2, 1.2, 0.2],
+    rotation: [0.2, 0.4, 0.3],
+    color: "#4444ff",
+  },
+  {
+    position: [0, 1, 0],
+    scale: [1.0, 0.5, 0.5],
+    rotation: [0.2, 0.4, 0.3],
+    color: "#4444ff",
+  },
 ];
 
-function Splat2D({ position, scale, rotation, color, selected }: Splat2DProps) {
-  const matrix = useMemo(() => {
-    const mat = new THREE.Matrix4();
-    const quaternion = new THREE.Quaternion();
-    quaternion.setFromEuler(new THREE.Euler(0, 0, rotation[2]));
-    mat.compose(
-      new Vector3(position[0], position[1], 0),
-      quaternion,
-      new Vector3(scale[0], scale[1], 1)
-    );
-    return mat;
-  }, [position, scale, rotation]);
-
-  // Create multiple outlines with slight offsets for thickness
-  const outlines = useMemo(() => {
-    const baseGeometry = new THREE.CircleGeometry(1, 64);
-    const edges = new THREE.EdgesGeometry(baseGeometry);
-    const offsets = selected
-      ? [-0.003, -0.001, 0, 0.001, 0.003]
-      : [-0.001, 0, 0.001];
-
-    return offsets.map(offset => {
-      const offsetMatrix = new THREE.Matrix4().multiply(
-        new THREE.Matrix4().makeTranslation(offset, offset, 0)
-      );
-      const geometry = edges.clone();
-      geometry.applyMatrix4(matrix).applyMatrix4(offsetMatrix);
-      return geometry;
-    });
-  }, [matrix, selected]);
-
-  return (
-    <group>
-      {outlines.map((geometry, i) => (
-        <lineSegments key={outlineIds[i]} geometry={geometry}>
-          <lineBasicMaterial
-            color={color}
-            transparent={true}
-            opacity={selected ? 1 : 0.7}
-            linewidth={selected ? 8 : 4}
-          />
-        </lineSegments>
-      ))}
-    </group>
-  );
-}
-
-// Add unique IDs for matrix elements
-function MatrixDisplay({ matrix }: { matrix: THREE.Matrix3 | THREE.Matrix4 }) {
-  const elements = useMemo(() => {
-    if (matrix instanceof THREE.Matrix3) {
-      return Array(3)
-        .fill(0)
-        .map((_, i) =>
-          Array(3)
-            .fill(0)
-            .map((_, j) => ({
-              id: `m3-${i}-${j}`,
-              value: matrix.elements[i * 3 + j],
-            }))
-        );
-    }
-
-    return Array(4)
-      .fill(0)
-      .map((_, i) =>
-        Array(4)
-          .fill(0)
-          .map((_, j) => ({
-            id: `m4-${i}-${j}`,
-            value: matrix.elements[i * 4 + j],
-          }))
-      );
-  }, [matrix]);
-
-  return (
-    <div className="font-mono text-xs !text-black">
-      {elements.map((row, i) => (
-        <div key={`row-${i}`} className="flex gap-2">
-          {row.map(({ id, value }) => (
-            <span key={id} className="w-16 text-right">
-              {value.toFixed(3)}
-            </span>
-          ))}
-        </div>
-      ))}
-    </div>
-  );
-}
-
+// Utility functions
 function getProjectionJacobian(
   position: [number, number, number],
   viewMatrix: THREE.Matrix4,
   focalLength = 1000
-) {
-  // Convert position to camera space first using view matrix
+): THREE.Matrix3 {
   const cameraSpacePos = new THREE.Vector3(...position).applyMatrix4(
     viewMatrix
   );
-  const x = cameraSpacePos.x;
-  const y = cameraSpacePos.y;
-  const z = cameraSpacePos.z;
+  const { x, y, z } = cameraSpacePos;
 
-  // Add safety check for near-zero z values
-  const minZ = 0.0001; // Some small epsilon value
+  const minZ = 0.0001;
   const safeZ = Math.abs(z) < minZ ? Math.sign(z) * minZ : z;
 
-  // Create Jacobian matrix
   const matrix = new THREE.Matrix3();
   matrix.set(
     focalLength / safeZ,
@@ -325,190 +82,284 @@ function getProjectionJacobian(
   return matrix;
 }
 
-function CameraControls({
+// Components
+function CameraFrustum({
   position,
   lookAt,
-  onChange,
-  selectedIndex,
-  gaussians,
-}: CameraControlsProps) {
-  const W = useMemo(() => {
+  fov = 75,
+  aspect = 1,
+  near = 0.1,
+  far = 10,
+}: {
+  position: [number, number, number];
+  lookAt: [number, number, number];
+  fov?: number;
+  aspect?: number;
+  near?: number;
+  far?: number;
+}) {
+  const frustumGeometry = useMemo(() => {
+    const halfFovRad = (fov * Math.PI) / 360;
+    const nearHeight = 2 * Math.tan(halfFovRad) * near;
+    const nearWidth = nearHeight * aspect;
+    const farHeight = 2 * Math.tan(halfFovRad) * far;
+    const farWidth = farHeight * aspect;
+
+    const vertices = new Float32Array([
+      -nearWidth / 2,
+      -nearHeight / 2,
+      -near,
+      nearWidth / 2,
+      -nearHeight / 2,
+      -near,
+      nearWidth / 2,
+      nearHeight / 2,
+      -near,
+      -nearWidth / 2,
+      nearHeight / 2,
+      -near,
+      -farWidth / 2,
+      -farHeight / 2,
+      -far,
+      farWidth / 2,
+      -farHeight / 2,
+      -far,
+      farWidth / 2,
+      farHeight / 2,
+      -far,
+      -farWidth / 2,
+      farHeight / 2,
+      -far,
+    ]);
+
+    const indices = new Uint16Array([
+      0, 1, 1, 2, 2, 3, 3, 0, 4, 5, 5, 6, 6, 7, 7, 4, 0, 4, 1, 5, 2, 6, 3, 7,
+    ]);
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.BufferAttribute(vertices, 3));
+    geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+    return geometry;
+  }, [fov, aspect, near, far]);
+
+  const quaternion = useMemo(() => {
+    const pos = new THREE.Vector3(...position);
+    const target = new THREE.Vector3(...lookAt);
+    const direction = target.sub(pos).normalize();
+
+    const q = new THREE.Quaternion();
     const matrix = new THREE.Matrix4();
     matrix.lookAt(
-      new THREE.Vector3(...position),
-      new THREE.Vector3(...lookAt),
-      new Vector3(0, 1, 0)
+      new THREE.Vector3(0, 0, 0),
+      direction,
+      new THREE.Vector3(0, 1, 0)
     );
-    return matrix;
+    q.setFromRotationMatrix(matrix);
+    return q;
   }, [position, lookAt]);
 
-  // Remove unnecessary dependencies
-  const selectedJacobian = useMemo(() => {
-    if (selectedIndex === null) return null;
-    return getProjectionJacobian(gaussians[selectedIndex].position, W);
-  }, [selectedIndex, gaussians, W]);
+  return (
+    <group position={position} quaternion={quaternion}>
+      <mesh>
+        <boxGeometry args={[0.5, 0.5, 1]} />
+        <meshBasicMaterial color="yellow" wireframe />
+      </mesh>
+      <mesh position={[0, 0, -0.75]}>
+        <coneGeometry args={[0.2, 0.5]} />
+        <meshBasicMaterial color="yellow" wireframe />
+      </mesh>
+      <lineSegments geometry={frustumGeometry}>
+        <lineBasicMaterial color="yellow" />
+      </lineSegments>
+    </group>
+  );
+}
+
+function GaussianEllipsoid({
+  position,
+  scale,
+  rotation,
+  color,
+  selected,
+  onSelect,
+}: {
+  position: [number, number, number];
+  scale: [number, number, number];
+  rotation: [number, number, number];
+  color: string;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const [hovered, setHover] = useState(false);
 
   return (
-    <div className="bg-gray-50 p-2 rounded !text-black px-4 py-2">
-      <div className="grid grid-cols-2 gap-4">
-        <div>
-          <p className="text-xs font-bold mb-1 !text-black">Camera Position</p>
-          <div className="space-y-1">
-            <label className="flex items-center gap-1">
-              <span className="w-4">X:</span>
-              <input
-                type="range"
-                min="-10"
-                max="10"
-                step="0.1"
-                value={position[0]}
-                onChange={e =>
-                  onChange(
-                    [
-                      Number.parseFloat(e.target.value),
-                      position[1],
-                      position[2],
-                    ],
-                    lookAt
-                  )
-                }
-                className="h-4"
-              />
-              <span className="w-8 text-right">{position[0].toFixed(1)}</span>
-            </label>
-            <label className="flex items-center gap-1">
-              <span className="w-4">Y:</span>
-              <input
-                type="range"
-                min="-10"
-                max="10"
-                step="0.1"
-                value={position[1]}
-                onChange={e =>
-                  onChange(
-                    [
-                      position[0],
-                      Number.parseFloat(e.target.value),
-                      position[2],
-                    ],
-                    lookAt
-                  )
-                }
-                className="h-4"
-              />
-              <span className="w-8 text-right">{position[1].toFixed(1)}</span>
-            </label>
-            <label className="flex items-center gap-1">
-              <span className="w-4">Z:</span>
-              <input
-                type="range"
-                min="-10"
-                max="10"
-                step="0.1"
-                value={position[2]}
-                onChange={e =>
-                  onChange(
-                    [
-                      position[0],
-                      position[1],
-                      Number.parseFloat(e.target.value),
-                    ],
-                    lookAt
-                  )
-                }
-                className="h-4"
-              />
-              <span className="w-8 text-right">{position[2].toFixed(1)}</span>
-            </label>
-          </div>
+    <mesh
+      position={position}
+      rotation={rotation}
+      scale={scale}
+      onClick={onSelect}
+      onPointerOver={() => setHover(true)}
+      onPointerOut={() => setHover(false)}
+    >
+      <sphereGeometry args={[1, 32, 32]} />
+      <meshStandardMaterial
+        color={hovered ? "hotpink" : color}
+        transparent
+        opacity={selected ? 0.9 : 0.5}
+        metalness={0.1}
+        roughness={0.8}
+      />
+    </mesh>
+  );
+}
+
+function Splat2D({
+  position,
+  scale,
+  rotation,
+  color,
+  selected,
+}: {
+  position: [number, number, number];
+  scale: [number, number, number];
+  rotation: [number, number, number];
+  color: string;
+  selected: boolean;
+}) {
+  const matrix = useMemo(() => {
+    const mat = new THREE.Matrix4();
+    const quaternion = new THREE.Quaternion();
+    quaternion.setFromEuler(new THREE.Euler(0, 0, rotation[2]));
+    mat.compose(
+      new Vector3(position[0], position[1], 0),
+      quaternion,
+      new Vector3(scale[0], scale[1], 1)
+    );
+    return mat;
+  }, [position, scale, rotation]);
+
+  const fillGeometry = useMemo(() => {
+    const circle = new THREE.CircleGeometry(1, 64);
+    circle.applyMatrix4(matrix);
+    return circle;
+  }, [matrix]);
+
+  const edgeGeometry = useMemo(() => {
+    const circle = new THREE.CircleGeometry(1, 64);
+    const edges = new THREE.EdgesGeometry(circle);
+    edges.applyMatrix4(matrix);
+    return edges;
+  }, [matrix]);
+
+  return (
+    <group>
+      <mesh geometry={fillGeometry}>
+        <meshBasicMaterial
+          color={color}
+          transparent
+          opacity={selected ? 0.6 : 0.4}
+          depthWrite={false}
+        />
+      </mesh>
+      <lineSegments geometry={edgeGeometry}>
+        <lineBasicMaterial
+          color={color}
+          transparent
+          opacity={selected ? 1 : 0.8}
+          depthWrite={false}
+        />
+      </lineSegments>
+    </group>
+  );
+}
+
+function MatrixDisplay({
+  matrix,
+  size,
+}: {
+  matrix: THREE.Matrix3 | THREE.Matrix4;
+  size: 3 | 4;
+}) {
+  const rows = useMemo(() => {
+    return Array.from({ length: size }, (_, i) =>
+      Array.from({ length: size }, (_, j) => matrix.elements[i * size + j])
+    );
+  }, [matrix, size]);
+
+  return (
+    <div className="font-mono text-xs" style={{ color: "#111" }}>
+      {rows.map((row, i) => (
+        <div key={i} className="flex gap-2">
+          {row.map((value, j) => (
+            <span key={j} className="w-16 text-right">
+              {value.toFixed(3)}
+            </span>
+          ))}
         </div>
-        <div>
-          <p className="text-xs font-bold mb-1 !text-black">Look At</p>
-          <div className="space-y-1">
-            <label className="flex items-center gap-1">
-              <span className="w-4">X:</span>
-              <input
-                type="range"
-                min="-10"
-                max="10"
-                step="0.1"
-                value={lookAt[0]}
-                onChange={e =>
-                  onChange(position, [
-                    Number.parseFloat(e.target.value),
-                    lookAt[1],
-                    lookAt[2],
-                  ])
-                }
-                className="h-4"
-              />
-              <span className="w-8 text-right">{lookAt[0].toFixed(1)}</span>
-            </label>
-            <label className="flex items-center gap-1">
-              <span className="w-4">Y:</span>
-              <input
-                type="range"
-                min="-10"
-                max="10"
-                step="0.1"
-                value={lookAt[1]}
-                onChange={e =>
-                  onChange(position, [
-                    lookAt[0],
-                    Number.parseFloat(e.target.value),
-                    lookAt[2],
-                  ])
-                }
-                className="h-4"
-              />
-              <span className="w-8 text-right">{lookAt[1].toFixed(1)}</span>
-            </label>
-            <label className="flex items-center gap-1">
-              <span className="w-4">Z:</span>
-              <input
-                type="range"
-                min="-10"
-                max="10"
-                step="0.1"
-                value={lookAt[2]}
-                onChange={e =>
-                  onChange(position, [
-                    lookAt[0],
-                    lookAt[1],
-                    Number.parseFloat(e.target.value),
-                  ])
-                }
-                className="h-4"
-              />
-              <span className="w-8 text-right">{lookAt[2].toFixed(1)}</span>
-            </label>
-          </div>
-        </div>
+      ))}
+    </div>
+  );
+}
+
+function InfoPanel({
+  viewMatrix,
+  selectedIndex,
+  gaussians,
+  activePreset,
+  onPresetChange,
+}: {
+  viewMatrix: THREE.Matrix4;
+  selectedIndex: number | null;
+  gaussians: Gaussian[];
+  activePreset: string;
+  onPresetChange: (preset: CameraPreset) => void;
+}) {
+  const selectedJacobian = useMemo(() => {
+    if (selectedIndex === null) return null;
+    return getProjectionJacobian(gaussians[selectedIndex].position, viewMatrix);
+  }, [selectedIndex, gaussians, viewMatrix]);
+
+  return (
+    <div className="not-prose bg-gray-50 p-4 rounded" style={{ color: "#111" }}>
+      <div className="flex gap-2 mb-4">
+        {CAMERA_PRESETS.map(preset => (
+          <button
+            key={preset.name}
+            onClick={() => onPresetChange(preset)}
+            className={`px-3 py-1 rounded text-sm transition-colors ${
+              activePreset === preset.name
+                ? "bg-blue-600 text-white"
+                : "bg-gray-200 hover:bg-gray-300"
+            }`}
+            style={activePreset === preset.name ? {} : { color: "#333" }}
+          >
+            {preset.name}
+          </button>
+        ))}
       </div>
 
-      {/* Matrix displays */}
-      <div className="w-full mt-4 grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-2 gap-4">
         <div>
-          <p className="font-bold mb-1 !text-black">W (View) Matrix:</p>
-          <MatrixDisplay matrix={W} />
+          <p className="font-bold mb-1 text-sm" style={{ color: "#111" }}>
+            View Matrix (W)
+          </p>
+          <MatrixDisplay matrix={viewMatrix} size={4} />
         </div>
 
-        {selectedIndex !== null && selectedJacobian ? (
-          <div>
-            <p className="font-bold mb-1 !text-black">
-              Jacobian (J) for Selected Gaussian:
+        <div>
+          {selectedIndex !== null && selectedJacobian ? (
+            <>
+              <p className="font-bold mb-1 text-sm" style={{ color: "#111" }}>
+                Jacobian (J) for Selected
+              </p>
+              <MatrixDisplay matrix={selectedJacobian} size={3} />
+            </>
+          ) : (
+            <p className="text-sm" style={{ color: "#666" }}>
+              Click a Gaussian to see its Jacobian
             </p>
-            <div>
-              <MatrixDisplay matrix={selectedJacobian} />
-            </div>
-          </div>
-        ) : (
-          <div>
-            <p className="font-bold mb-1 !text-black">
-              Click on a Gaussian to see it's Jacobian
-            </p>
-          </div>
-        )}
+          )}
+        </div>
       </div>
     </div>
   );
@@ -516,187 +367,104 @@ function CameraControls({
 
 function Scene() {
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
-  const [gaussians, setGaussians] = useState<Gaussian[]>([
-    {
-      position: [-1, 0, 0],
-      scale: [1.5, 0.5, 0.8],
-      rotation: [0.5, 0.3, 0.1],
-      color: "#ff4444",
-    },
-    {
-      position: [1, 1, 1],
-      scale: [0.8, 1.2, 0.6],
-      rotation: [0.2, 0.4, 0.3],
-      color: "#44ff44",
-    },
-    {
-      position: [0, 0, 0],
-      scale: [0.2, 1.2, 0.2],
-      rotation: [0.2, 0.4, 0.3],
-      color: "#4444ff",
-    },
-    {
-      position: [0, 1, 0],
-      scale: [1.0, 0.5, 0.5],
-      rotation: [0.2, 0.4, 0.3],
-      color: "#4444ff",
-    },
-  ]);
+  const [activePreset, setActivePreset] = useState(CAMERA_PRESETS[3]); // Start at Corner
+  const gaussians = INITIAL_GAUSSIANS;
 
-  const [cameraPos, setCameraPos] = useState<[number, number, number]>([
-    3, 0, 3,
-  ]);
-  const [cameraLookAt, setCameraLookAt] = useState<[number, number, number]>([
-    0, 0, 0,
-  ]);
-
-  const handleCameraChange = (
-    newPosition: [number, number, number],
-    newLookAt: [number, number, number]
-  ) => {
-    setCameraPos(newPosition);
-    setCameraLookAt(newLookAt);
-  };
-
-  // Calculate view matrix for 2D projection
   const viewMatrix = useMemo(() => {
     const matrix = new Matrix4();
     matrix.lookAt(
-      new Vector3(...cameraPos),
-      new Vector3(...cameraLookAt),
+      new Vector3(...activePreset.position),
+      new Vector3(...activePreset.lookAt),
       new Vector3(0, 1, 0)
     );
     return matrix;
-  }, [cameraPos, cameraLookAt]);
-
-  const handleMove = (index: number, delta: [number, number, number]) => {
-    setGaussians(prevGaussians => {
-      const newGaussians = [...prevGaussians];
-      const newPosition: [number, number, number] = [
-        prevGaussians[index].position[0] + delta[0],
-        prevGaussians[index].position[1] + delta[1],
-        prevGaussians[index].position[2] + delta[2],
-      ];
-      newGaussians[index] = {
-        ...prevGaussians[index],
-        position: newPosition,
-      };
-      return newGaussians;
-    });
-  };
-
-  // Static camera position for the 3D view
-  const staticCameraPosition: [number, number, number] = [10, 5, 10];
-  const staticCameraTarget: [number, number, number] = [0, 0, 0];
-
-  // Add unique IDs for Gaussians
-  // biome-ignore lint/correctness/useExhaustiveDependencies: Useless honestly
-  const gaussianIds = useMemo(
-    () => gaussians.map((_, i) => `gaussian-${i}`),
-    [gaussians.length]
-  );
+  }, [activePreset]);
 
   return (
-    <div className="w-full h-[400px]">
-      <div className="w-full h-full grid grid-cols-2 relative">
-        <div className="w-full h-full border-2 border-gray-100">
-          <div className="absolute top-0 left-0 z-20 bg-white border-2 border-gray-50  py-0 px-2">
-            <p className="text-xs !text-black">3D View</p>
-          </div>
-
+    <div className="w-full h-full flex flex-col">
+      <div className="flex-1 grid grid-cols-2 relative min-h-0">
+        <div className="relative border-r border-gray-200">
+          <span className="absolute top-2 left-2 z-10 bg-white/90 px-2 py-0.5 text-xs text-gray-600 rounded">
+            3D View
+          </span>
           <Canvas>
-            {/* Static camera for overview */}
-            <PerspectiveCamera
-              makeDefault={true}
-              position={staticCameraPosition}
-              fov={45}
-            />
+            <PerspectiveCamera makeDefault position={[10, 5, 10]} fov={45} />
             <OrbitControls
-              target={new Vector3(...staticCameraTarget)}
+              target={new Vector3(0, 0, 0)}
               enablePan={false}
               minDistance={5}
               maxDistance={20}
             />
             <ambientLight intensity={0.5} />
             <pointLight position={[10, 10, 10]} />
-
-            {/* Camera visualization */}
-            <CameraFrustum position={cameraPos} lookAt={cameraLookAt} />
-
-            {/* Existing Gaussians */}
+            <CameraFrustum
+              position={activePreset.position}
+              lookAt={activePreset.lookAt}
+            />
             {gaussians.map((g, i) => (
               <GaussianEllipsoid
-                key={gaussianIds[i]}
+                key={i}
                 {...g}
                 selected={selectedIndex === i}
                 onSelect={() =>
                   setSelectedIndex(i === selectedIndex ? null : i)
                 }
-                onMove={delta => handleMove(i, delta)}
               />
             ))}
-
             <axesHelper args={[5]} />
           </Canvas>
         </div>
 
-        <div className="w-full h-full border-2 border-gray-100">
-          <div className="absolute top-0 right-0 z-20 bg-white border-2 border-gray-50  py-0 px-2">
-            <p className="text-xs !text-black">Projection View</p>
-          </div>
-
+        <div className="relative">
+          <span className="absolute top-2 right-2 z-10 bg-white/90 px-2 py-0.5 text-xs text-gray-600 rounded">
+            Projection View
+          </span>
           <Canvas>
-            {/* Dynamic camera controlled by sliders */}
             <PerspectiveCamera
-              makeDefault={true}
-              position={cameraPos}
+              makeDefault
+              position={activePreset.position}
               fov={75}
             />
             <OrbitControls
-              target={new Vector3(...cameraLookAt)}
+              target={new Vector3(...activePreset.lookAt)}
               enableRotate={false}
             />
-
-            {/* Update 2D view using view matrix */}
-            {gaussians.map((g, i) => {
-              const projectedPosition = new Vector3(...g.position).applyMatrix4(
-                viewMatrix
-              );
-
-              return (
+            {gaussians
+              .map((g, i) => {
+                const projected = new Vector3(...g.position).applyMatrix4(
+                  viewMatrix
+                );
+                return { g, i, projected, depth: projected.z };
+              })
+              .sort((a, b) => a.depth - b.depth) // Sort back-to-front
+              .map(({ g, i, projected }, sortIndex) => (
                 <Splat2D
-                  key={`${gaussianIds[i]}-2d`}
+                  key={i}
                   {...g}
-                  position={[projectedPosition.x, projectedPosition.y, 0]}
+                  position={[projected.x, projected.y, sortIndex * 0.01]} // Slight z offset by sort order
                   selected={selectedIndex === i}
                 />
-              );
-            })}
-
+              ))}
             <gridHelper args={[10, 10]} rotation={[Math.PI / 2, 0, 0]} />
           </Canvas>
         </div>
       </div>
 
-      <div className="w-full h-full">
-        <CameraControls
-          position={cameraPos}
-          lookAt={cameraLookAt}
-          onChange={handleCameraChange}
-          selectedIndex={selectedIndex}
-          gaussians={gaussians}
-        />
-      </div>
+      <InfoPanel
+        viewMatrix={viewMatrix}
+        selectedIndex={selectedIndex}
+        gaussians={gaussians}
+        activePreset={activePreset.name}
+        onPresetChange={setActivePreset}
+      />
     </div>
   );
 }
 
 export function SplatPreview() {
   return (
-    <div className="w-full h-[620px] bg-gray-100 mb-16">
-      <KeyboardControls map={controls}>
-        <Scene />
-      </KeyboardControls>
+    <div className="not-prose w-full h-[580px] bg-gray-100 mb-16">
+      <Scene />
     </div>
   );
 }
