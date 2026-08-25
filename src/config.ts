@@ -4,7 +4,7 @@ export const SITE: Site = {
   website: "https://graemeharris.github.io/",
   author: "Graeme Harris",
   desc: "Stubbing my toe against reality",
-  title: "Grey Blog",
+  title: "Graeme's Blog",
   ogImage: "astropaper-og.jpg",
   lightAndDarkMode: true,
   postPerPage: 3,
@@ -37,9 +37,9 @@ export const SOCIALS: SocialObjects = [
     active: true,
   },
   {
-    name: "Twitter",
+    name: "X",
     href: "https://x.com/GesturingMan",
-    linkTitle: `${SITE.title} on Twitter`,
+    linkTitle: `${SITE.title} on X`,
     active: true,
   },
   {

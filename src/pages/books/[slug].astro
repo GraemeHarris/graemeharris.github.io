@@ -1,0 +1,214 @@
+---
+import { type CollectionEntry, getCollection, render } from "astro:content";
+import Layout from "@layouts/Layout.astro";
+import Header from "@components/Header.astro";
+import Footer from "@components/Footer.astro";
+import { SITE } from "@config";
+
+export interface Props {
+  book: CollectionEntry<"books">;
+}
+
+export async function getStaticPaths() {
+  const books = await getCollection("books");
+  return books.map(book => ({
+    params: { slug: book.id },
+    props: { book },
+  }));
+}
+
+const { book } = Astro.props;
+const { Content } = await render(book);
+const hasReview = (book.body ?? "").trim().length > 0;
+
+const {
+  title,
+  author,
+  rating,
+  cover,
+  dateRead,
+  pages,
+  isbn,
+  shelves,
+  oneLineTake,
+} = book.data;
+
+// Hand-written entries have no rating; only the imported ones do.
+const stars =
+  rating === undefined ? null : "★".repeat(rating) + "☆".repeat(5 - rating);
+const dateReadFmt = dateRead
+  ? new Date(dateRead).toLocaleDateString(undefined, {
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    })
+  : null;
+---
+
+<Layout
+  title={`${title} | ${SITE.title}`}
+  description={oneLineTake ?? `${title} by ${author}`}
+>
+  <Header activeNav="books" />
+
+  <div class="mx-auto flex w-full max-w-3xl justify-start px-4">
+    <a href="/books/" class="back-link">← Back to books</a>
+  </div>
+
+  <main id="main-content">
+    <figure class="gutter-cover">
+      <img class="cover-big" src={cover} alt={`Cover of ${title}`} />
+    </figure>
+    <div class="column">
+      <div class="hero">
+        <img
+          class="cover"
+          src={cover}
+          alt={`Cover of ${title}`}
+          loading="eager"
+        />
+        <div class="meta">
+          <h1>{title}</h1>
+          <p class="byline">by {author}</p>
+          {
+            stars && (
+              <p class="stars" aria-label={`Rated ${rating} out of 5`}>
+                {stars}
+              </p>
+            )
+          }
+          {oneLineTake && <blockquote class="take">"{oneLineTake}"</blockquote>}
+          <ul class="facts">
+            {
+              dateReadFmt && (
+                <li>
+                  <span>Read:</span> {dateReadFmt}
+                </li>
+              )
+            }
+            {
+              pages && (
+                <li>
+                  <span>Pages:</span> {pages}
+                </li>
+              )
+            }
+            {
+              isbn && (
+                <li>
+                  <span>ISBN:</span> {isbn}
+                </li>
+              )
+            }
+          </ul>
+          {
+            shelves.length > 0 && (
+              <ul class="shelves">
+                {shelves.map(s => (
+                  <li class="shelf-chip">{s}</li>
+                ))}
+              </ul>
+            )
+          }
+        </div>
+      </div>
+
+      <hr class="divider" />
+
+      {
+        hasReview ? (
+          <article id="article" role="article" class="prose max-w-none">
+            <Content />
+          </article>
+        ) : (
+          <p class="no-review">No review yet — just the metadata.</p>
+        )
+      }
+    </div>
+  </main>
+  <Footer />
+</Layout>
+
+<style>
+  @reference "../../styles/base.css";
+  /* Three tracks: the left gutter holds the cover as large as it will go, the
+     middle one is the reading column. */
+  main {
+    @apply grid w-full pb-12;
+    grid-template-columns: 1fr min(48rem, 100%) 1fr;
+  }
+  .column {
+    @apply px-4;
+    grid-column: 2;
+  }
+  .gutter-cover {
+    grid-column: 1;
+    @apply m-0 hidden;
+  }
+  .back-link {
+    @apply mb-2 mt-8 inline-block text-sm hover:opacity-75;
+  }
+  .hero {
+    @apply mt-6 grid grid-cols-1 gap-6 sm:grid-cols-[180px_1fr];
+  }
+  .cover {
+    @apply h-auto w-full max-w-[200px] rounded-sm shadow-lg sm:max-w-none;
+  }
+
+  /* Once the gutter is wide enough to be worth using, the cover moves into it
+     and the small one in the hero row goes away. */
+  @media (min-width: 1180px) {
+    /* The figure has to stretch across the gutter track: a shrink-wrapped grid
+       item would size to the image's natural width and cap it there. */
+    .gutter-cover {
+      @apply block self-start justify-self-stretch px-2;
+      position: sticky;
+      top: 1rem;
+    }
+    .cover-big {
+      @apply mx-auto block h-auto rounded-sm shadow-2xl;
+      width: min(100%, 34rem);
+      max-height: calc(100vh - 2.5rem);
+      object-fit: contain;
+    }
+    .hero {
+      @apply grid-cols-1;
+    }
+    .hero .cover {
+      @apply hidden;
+    }
+  }
+  .meta h1 {
+    @apply text-2xl font-semibold text-skin-accent sm:text-3xl;
+  }
+  .byline {
+    @apply mt-1 opacity-80;
+  }
+  .stars {
+    @apply mt-2 text-lg;
+    color: #d4a017;
+    letter-spacing: 0.1em;
+  }
+  .take {
+    @apply mt-3 border-l-2 pl-3 italic opacity-90;
+    border-color: rgb(var(--color-accent));
+  }
+  .facts {
+    @apply mt-4 space-y-1 text-sm;
+  }
+  .facts span {
+    @apply mr-1 font-semibold opacity-80;
+  }
+  .shelves {
+    @apply mt-3 flex flex-wrap gap-2;
+  }
+  .shelf-chip {
+    @apply rounded-full border px-2 py-0.5 text-xs opacity-75;
+  }
+  .divider {
+    @apply my-8 opacity-30;
+  }
+  .no-review {
+    @apply text-center italic opacity-70;
+  }
+</style>

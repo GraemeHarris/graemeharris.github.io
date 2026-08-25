@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 280" width="180" height="280" role="img" aria-label="Cover unavailable">
+  <defs>
+    <linearGradient id="cloth" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#a89682"/>
+      <stop offset="1" stop-color="#7d6b58"/>
+    </linearGradient>
+  </defs>
+  <rect width="180" height="280" fill="url(#cloth)"/>
+  <rect x="14" y="14" width="152" height="252" fill="none" stroke="#5b4636" stroke-width="1.5" opacity="0.5"/>
+  <g fill="#3d2d1f" opacity="0.55" font-family="serif" text-anchor="middle">
+    <text x="90" y="138" font-size="22" font-style="italic">no cover</text>
+    <text x="90" y="166" font-size="11" letter-spacing="2">AVAILABLE</text>
+  </g>
+</svg>

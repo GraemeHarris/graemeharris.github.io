@@ -1,0 +1,435 @@
+---
+/**
+ * Decorative masthead: a Penrose (P3) rhombus tiling in a single colour. Slow
+ * drifting blobs of brightness pass over it, each tile answering only with its
+ * own opacity and a slight breath in size — the rhombi are never distorted. The
+ * lower rows fade out. Purely ornamental: aria-hidden, and a flat static frame
+ * under prefers-reduced-motion.
+ */
+---
+
+<div class="penrose-band" aria-hidden="true">
+  <canvas data-penrose></canvas>
+</div>
+
+<style>
+  @reference "../styles/base.css";
+  .penrose-band {
+    /* No background and no fade of its own: the page colour shows through and
+       the tiling ends on whole tiles. */
+    @apply pointer-events-none w-full select-none overflow-hidden;
+    height: 116px;
+  }
+  @media (min-width: 640px) {
+    .penrose-band {
+      height: 184px;
+    }
+  }
+  canvas {
+    @apply block h-full w-full;
+  }
+  @media print {
+    .penrose-band {
+      display: none;
+    }
+  }
+</style>
+
+<script>
+  const PHI = (1 + Math.sqrt(5)) / 2;
+  const INV_PHI = 1 / PHI;
+
+  type Pt = { x: number; y: number };
+  type Tri = { t: number; a: Pt; b: Pt; c: Pt };
+  /** A rhombus: its four corners, its centre, and when it fades in. */
+  type Tile = {
+    xs: number[];
+    ys: number[];
+    cx: number;
+    cy: number;
+    delay: number;
+    fade: number;
+  };
+
+  const lerp = (p: Pt, q: Pt, f: number): Pt => ({
+    x: p.x + (q.x - p.x) * f,
+    y: p.y + (q.y - p.y) * f,
+  });
+
+  /** Ten Robinson triangles around a common apex — the "sun" patch. */
+  function sun(cx: number, cy: number, r: number): Tri[] {
+    const tris: Tri[] = [];
+    for (let i = 0; i < 10; i++) {
+      const a = { x: cx, y: cy };
+      let b = {
+        x: cx + r * Math.cos(((2 * i - 1) * Math.PI) / 10),
+        y: cy + r * Math.sin(((2 * i - 1) * Math.PI) / 10),
+      };
+      let c = {
+        x: cx + r * Math.cos(((2 * i + 1) * Math.PI) / 10),
+        y: cy + r * Math.sin(((2 * i + 1) * Math.PI) / 10),
+      };
+      if (i % 2 === 0) [b, c] = [c, b];
+      tris.push({ t: 0, a, b, c });
+    }
+    return tris;
+  }
+
+  /**
+   * One deflation step. Each triangle keeps its apex at `a` with |ab| = |ac|,
+   * which is what lets two halves be reassembled into a rhombus later.
+   */
+  function deflate(tris: Tri[]): Tri[] {
+    const out: Tri[] = [];
+    for (const { t, a, b, c } of tris) {
+      if (t === 0) {
+        const p = lerp(a, b, INV_PHI);
+        out.push({ t: 0, a: c, b: p, c: b });
+        out.push({ t: 1, a: p, b: c, c: a });
+      } else {
+        const q = lerp(b, a, INV_PHI);
+        const r = lerp(b, c, INV_PHI);
+        out.push({ t: 1, a: r, b: c, c: a });
+        out.push({ t: 1, a: q, b: r, c: b });
+        out.push({ t: 0, a: r, b: q, c: a });
+      }
+    }
+    return out;
+  }
+
+  /** Children never leave their parent, so a missed parent prunes a subtree. */
+  function overlapsBand(tr: Tri, w: number, h: number, margin: number) {
+    const minX = Math.min(tr.a.x, tr.b.x, tr.c.x);
+    const maxX = Math.max(tr.a.x, tr.b.x, tr.c.x);
+    const minY = Math.min(tr.a.y, tr.b.y, tr.c.y);
+    const maxY = Math.max(tr.a.y, tr.b.y, tr.c.y);
+    return (
+      maxX >= -margin &&
+      minX <= w + margin &&
+      maxY >= -margin &&
+      minY <= h + margin
+    );
+  }
+
+  const smoothstep = (a: number, b: number, x: number) => {
+    const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
+    return t * t * (3 - 2 * t);
+  };
+
+  /** Deterministic per-tile jitter so the reveal never looks like a clock hand. */
+  function hash01(x: number, y: number) {
+    const v = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453;
+    return v - Math.floor(v);
+  }
+
+  // Small gaussian blobs that travel along the band, wrapping round when they
+  // leave it, each breathing at its own rate. No wave, no shared period.
+  /** Blob spacing follows the band height, so wide screens get more of them. */
+  const blobCount = (w: number, h: number) =>
+    Math.min(32, Math.max(6, Math.round(w / (h * 0.6))));
+  type Blob = {
+    x0: number;
+    y0: number;
+    vx: number; // px per second along the band, either direction
+    dy: number;
+    sy: number;
+    py: number;
+    sw: number; // how fast this blob's own brightness breathes
+    pw: number;
+    r: number;
+    r2: number;
+    weight: number;
+  };
+
+  /** Fixed seed: the piece is meant to look the same on every load. */
+  function makeRandom(seed: number) {
+    let s = seed >>> 0;
+    return () => {
+      s = (s * 1664525 + 1013904223) >>> 0;
+      return s / 4294967296;
+    };
+  }
+
+  function makeBlobs(w: number, h: number): Blob[] {
+    const rnd = makeRandom(0x9e3779b9);
+    const count = blobCount(w, h);
+    const blobs: Blob[] = [];
+    for (let i = 0; i < count; i++) {
+      // Small, and a mix of sizes, so the field stays lumpy rather than a wash.
+      const r = h * (0.2 + rnd() * rnd() * 0.55);
+      blobs.push({
+        x0: ((i + 0.5) / count) * w + (rnd() - 0.5) * (w / count),
+        y0: h * (0.08 + rnd() * 0.62),
+        vx: (rnd() < 0.5 ? -1 : 1) * h * (0.05 + rnd() * 0.22),
+        dy: h * (0.08 + rnd() * 0.22),
+        sy: 0.07 + rnd() * 0.16,
+        py: rnd() * Math.PI * 2,
+        sw: 0.1 + rnd() * 0.28,
+        pw: rnd() * Math.PI * 2,
+        r,
+        r2: r * r,
+        weight: 0.7 + rnd() * 0.8,
+      });
+    }
+    return blobs;
+  }
+
+  function buildTiles(w: number, h: number, side: number): Tile[] {
+    const cx = w * 0.5;
+    const cy = h * 0.42;
+    const radius =
+      Math.hypot(Math.max(cx, w - cx), Math.max(cy, h - cy)) + side * 3;
+    const steps = Math.min(
+      9,
+      Math.max(1, Math.ceil(Math.log(radius / side) / Math.log(PHI)))
+    );
+
+    let tris = sun(cx, cy, radius);
+    for (let i = 0; i < steps; i++) {
+      tris = deflate(tris).filter(tr => overlapsBand(tr, w, h, side * 2));
+    }
+
+    // Two halves sharing a base form one rhombus; unpaired halves sit on the
+    // patch boundary and are dropped, so every tile drawn is a whole rhombus.
+    const groups = new Map<string, Tri[]>();
+    for (const tr of tris) {
+      const key = `${Math.round((tr.b.x + tr.c.x) * 32)},${Math.round((tr.b.y + tr.c.y) * 32)}`;
+      const g = groups.get(key);
+      if (g) g.push(tr);
+      else groups.set(key, [tr]);
+    }
+
+    const maxDist = Math.hypot(Math.max(cx, w - cx), Math.max(cy, h - cy));
+    const tiles: Tile[] = [];
+    for (const g of groups.values()) {
+      if (g.length !== 2) continue;
+      const tr = g[0];
+      const d = { x: tr.b.x + tr.c.x - tr.a.x, y: tr.b.y + tr.c.y - tr.a.y };
+      const corners = [tr.a, tr.b, d, tr.c];
+      let top = Infinity;
+      let bottom = -Infinity;
+      for (const p of corners) {
+        top = Math.min(top, p.y);
+        bottom = Math.max(bottom, p.y);
+      }
+      // Neither horizontal edge is a cut: a rhombus that would straddle one is
+      // left out whole, so the silhouette is deckled tile boundaries. Tiles only
+      // ever shrink, so they can sit right against the edge.
+      if (top < 1 || bottom > h - 1) continue;
+      const mx = (tr.b.x + tr.c.x) / 2;
+      const my = (tr.b.y + tr.c.y) / 2;
+      const dist = Math.hypot(mx - cx, my - cy);
+      tiles.push({
+        xs: corners.map(p => p.x),
+        ys: corners.map(p => p.y),
+        cx: mx,
+        cy: my,
+        delay: (dist / maxDist) * 1.05 + hash01(mx, my) * 0.2,
+        // The lower rows fade away rather than stopping flat.
+        fade: 1 - smoothstep(0.42, 1, my / h),
+      });
+    }
+    return tiles;
+  }
+
+  function readRgb(name: string, fallback: [number, number, number]) {
+    const raw = getComputedStyle(document.documentElement).getPropertyValue(
+      name
+    );
+    const nums = raw.match(/-?\d+(\.\d+)?/g);
+    if (!nums || nums.length < 3) return fallback;
+    return [Number(nums[0]), Number(nums[1]), Number(nums[2])] as [
+      number,
+      number,
+      number,
+    ];
+  }
+
+  // Edge weight is stroked in bands rather than per tile, so the shared edge
+  // between two neighbours is never drawn twice into the same alpha.
+  const EDGE_BANDS = 8;
+
+  let teardown: (() => void) | null = null;
+
+  function mount() {
+    teardown?.();
+    teardown = null;
+
+    const canvas = document.querySelector<HTMLCanvasElement>("[data-penrose]");
+    const ctx = canvas?.getContext("2d");
+    if (!canvas || !ctx) return;
+
+    const reduced = window.matchMedia(
+      "(prefers-reduced-motion: reduce)"
+    ).matches;
+    let tiles: Tile[] = [];
+    let blobs: Blob[] = [];
+    let side = 30;
+    let w = 0;
+    let h = 0;
+    let ink: [number, number, number] = [40, 39, 40];
+    let inkFloor = 0.05;
+    let inkRange = 0.15;
+    let edgeAlpha = 0.14;
+    let frame = 0;
+    let started = 0;
+    let visible = true;
+
+    function readPalette() {
+      const dark = document.documentElement.dataset.theme === "dark";
+      // One colour throughout — only its opacity moves.
+      ink = readRgb("--color-text-base", dark ? [234, 237, 243] : [40, 39, 40]);
+      // Opacity carries the whole effect: nothing outside a blob, full tint
+      // under one.
+      inkFloor = 0;
+      inkRange = dark ? 0.28 : 0.26;
+      edgeAlpha = dark ? 0.16 : 0.15;
+    }
+
+    function resize() {
+      const rect = canvas!.getBoundingClientRect();
+      const dpr = Math.min(2, window.devicePixelRatio || 1);
+      w = Math.round(rect.width);
+      h = Math.round(rect.height);
+      canvas!.width = Math.max(1, Math.round(w * dpr));
+      canvas!.height = Math.max(1, Math.round(h * dpr));
+      ctx!.setTransform(dpr, 0, 0, dpr, 0, 0);
+      side = Math.min(36, Math.max(18, h / 4.6));
+      tiles = buildTiles(w, h, side);
+      blobs = makeBlobs(w, h);
+    }
+
+    function draw(now: number) {
+      if (!started) started = now;
+      const t = (now - started) / 1000;
+      ctx!.clearRect(0, 0, w, h);
+      const [r, g, b] = ink;
+      ctx!.lineWidth = 0.7;
+
+      // Where the blobs are this instant, and how bright each one is. They
+      // travel along the band and wrap round, so activity keeps arriving.
+      const bx: number[] = [];
+      const by: number[] = [];
+      const bw: number[] = [];
+      for (const blob of blobs) {
+        if (reduced) {
+          bx.push(blob.x0);
+          by.push(blob.y0);
+          bw.push(blob.weight);
+          continue;
+        }
+        const span = w + blob.r * 4;
+        let x = (blob.x0 + blob.r * 2 + blob.vx * t) % span;
+        if (x < 0) x += span;
+        bx.push(x - blob.r * 2);
+        by.push(blob.y0 + blob.dy * Math.sin(t * blob.sy + blob.py));
+        bw.push(blob.weight * (0.7 + 0.3 * Math.sin(t * blob.sw + blob.pw)));
+      }
+
+      const edgeBands: Path2D[] = [];
+      for (let i = 0; i < EDGE_BANDS; i++) edgeBands.push(new Path2D());
+
+      for (const tile of tiles) {
+        const reveal = reduced
+          ? 1
+          : Math.min(1, Math.max(0, (t - tile.delay) / 0.9));
+        if (reveal <= 0) continue;
+        const eased = 1 - Math.pow(1 - reveal, 3);
+
+        let field = 0;
+        for (let i = 0; i < blobs.length; i++) {
+          const dx = tile.cx - bx[i];
+          const dy = tile.cy - by[i];
+          field += bw[i] * Math.exp(-(dx * dx + dy * dy) / blobs[i].r2);
+        }
+        // Soft knee rather than a hard clip, so blobs arrive gently.
+        const lit = 1 - Math.exp(-field * 1.9);
+        const life = lit * tile.fade * eased;
+
+        const alpha = inkFloor + inkRange * life;
+        if (alpha < 0.004) continue;
+
+        // Full size, true rhombus: only the opacity moves.
+        const path = new Path2D();
+        path.moveTo(tile.xs[0], tile.ys[0]);
+        path.lineTo(tile.xs[1], tile.ys[1]);
+        path.lineTo(tile.xs[2], tile.ys[2]);
+        path.lineTo(tile.xs[3], tile.ys[3]);
+        path.closePath();
+
+        ctx!.fillStyle = `rgba(${r},${g},${b},${alpha.toFixed(4)})`;
+        ctx!.fill(path);
+        edgeBands[
+          Math.min(EDGE_BANDS - 1, Math.floor(life * EDGE_BANDS))
+        ].addPath(path);
+      }
+
+      for (let i = 0; i < EDGE_BANDS; i++) {
+        const a = edgeAlpha * ((i + 0.5) / EDGE_BANDS);
+        if (a < 0.004) continue;
+        ctx!.strokeStyle = `rgba(${r},${g},${b},${a.toFixed(4)})`;
+        ctx!.stroke(edgeBands[i]);
+      }
+    }
+
+    function loop(now: number) {
+      draw(now);
+      frame = requestAnimationFrame(loop);
+    }
+    function play() {
+      if (reduced || frame) return;
+      frame = requestAnimationFrame(loop);
+    }
+    function pause() {
+      if (!frame) return;
+      cancelAnimationFrame(frame);
+      frame = 0;
+    }
+
+    readPalette();
+    resize();
+    if (reduced) draw(performance.now());
+    else play();
+
+    let resizeTimer = 0;
+    const onResize = () => {
+      window.clearTimeout(resizeTimer);
+      resizeTimer = window.setTimeout(() => {
+        const rect = canvas!.getBoundingClientRect();
+        if (Math.abs(rect.width - w) < 2 && Math.abs(rect.height - h) < 2)
+          return;
+        resize();
+        if (reduced || !visible) draw(performance.now());
+      }, 160);
+    };
+    window.addEventListener("resize", onResize);
+
+    const themeObserver = new MutationObserver(() => {
+      readPalette();
+      if (reduced || !visible) draw(performance.now());
+    });
+    themeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-theme"],
+    });
+
+    // Nothing to animate once the masthead has scrolled away.
+    const io = new IntersectionObserver(entries => {
+      visible = entries[0]?.isIntersecting ?? true;
+      if (visible) play();
+      else pause();
+    });
+    io.observe(canvas);
+
+    teardown = () => {
+      pause();
+      window.clearTimeout(resizeTimer);
+      window.removeEventListener("resize", onResize);
+      themeObserver.disconnect();
+      io.disconnect();
+    };
+  }
+
+  mount();
+  document.addEventListener("astro:after-swap", mount);
+</script>

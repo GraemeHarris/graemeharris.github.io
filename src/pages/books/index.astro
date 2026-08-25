@@ -1,0 +1,312 @@
+---
+import { getCollection } from "astro:content";
+import Layout from "@layouts/Layout.astro";
+import Header from "@components/Header.astro";
+import Footer from "@components/Footer.astro";
+import { SITE } from "@config";
+
+const all = await getCollection("books");
+
+const byOrder = (a: (typeof all)[number], b: (typeof all)[number]) => {
+  const oa = a.data.order ?? Number.MAX_SAFE_INTEGER;
+  const ob = b.data.order ?? Number.MAX_SAFE_INTEGER;
+  return oa === ob ? a.data.title.localeCompare(b.data.title) : oa - ob;
+};
+
+const shelves = [
+  {
+    id: "best",
+    label: "Best",
+    books: all.filter(b => b.data.list === "best").sort(byOrder),
+  },
+  {
+    id: "thoughts",
+    label: "Thoughts",
+    books: all.filter(b => b.data.list === "thoughts").sort(byOrder),
+  },
+];
+
+// Anything without a curated list — an imported backlog, say — still shows up.
+const rest = all
+  .filter(b => !b.data.list)
+  .sort((a, b) => {
+    const da = a.data.dateRead ? new Date(a.data.dateRead).getTime() : 0;
+    const db = b.data.dateRead ? new Date(b.data.dateRead).getTime() : 0;
+    return db - da || a.data.title.localeCompare(b.data.title);
+  });
+
+const year = (d: Date | null | undefined) =>
+  d ? new Date(d).getFullYear() : null;
+---
+
+<Layout
+  title={`Books | ${SITE.title}`}
+  description="The books I keep coming back to, and the ones I have thoughts about."
+>
+  <Header activeNav="books" />
+  <main id="main-content">
+    <div class="wrap">
+      <h1>Books</h1>
+    </div>
+
+    {
+      shelves.map(
+        shelf =>
+          shelf.books.length > 0 && (
+            <section class="shelf">
+              <div class="wrap">
+                <h2 id={`shelf-${shelf.id}`}>{shelf.label}</h2>
+              </div>
+              <ul class="covers" aria-labelledby={`shelf-${shelf.id}`}>
+                {shelf.books.map(book => (
+                  <li>
+                    <a
+                      class="cover-link focus-outline"
+                      href={`/books/${book.id}/`}
+                      title={`${book.data.title} — ${book.data.author}`}
+                    >
+                      <img
+                        class="cover"
+                        src={book.data.cover}
+                        alt={`${book.data.title} — front cover`}
+                        width="300"
+                        height="450"
+                        loading="lazy"
+                        decoding="async"
+                      />
+                      <span class="cover-title">{book.data.title}</span>
+                      <span class="cover-author">{book.data.author}</span>
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )
+      )
+    }
+
+    {
+      rest.length > 0 && (
+        <section class="shelf wrap">
+          <h2>Also read</h2>
+          <ul class="plain-list">
+            {rest.map(book => (
+              <li class="plain-row">
+                <a class="plain-link" href={`/books/${book.id}/`}>
+                  <span class="plain-title">{book.data.title}</span>
+                  <span class="plain-author">{book.data.author}</span>
+                </a>
+                {year(book.data.dateRead) && (
+                  <span class="plain-year">{year(book.data.dateRead)}</span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )
+    }
+
+    {
+      all.length === 0 && (
+        <p class="empty">
+          No books yet. Run <code>yarn books:import &lt;goodreads.csv&gt;</code>{" "}
+          to populate this list.
+        </p>
+      )
+    }
+  </main>
+  <Footer />
+</Layout>
+
+<style>
+  @reference "../../styles/base.css";
+  main {
+    @apply w-full pb-16;
+  }
+  /* Text blocks stay in the reading column; the cover rows do not. */
+  .wrap {
+    @apply mx-auto w-full max-w-3xl px-4;
+  }
+  .shelf {
+    /* base.css constrains every <section>; these run edge to edge instead. */
+    @apply max-w-none px-0;
+  }
+  h1 {
+    @apply mt-8 text-3xl font-bold sm:text-4xl;
+  }
+  .shelf {
+    @apply mt-10;
+  }
+  .shelf h2 {
+    @apply mb-3 text-[0.7rem] uppercase tracking-[0.18em] opacity-60;
+  }
+
+  /* A row of front covers spanning the whole window, scrolled sideways by
+     wheel, drag, swipe or keyboard. The scrollbar is hidden in every engine so
+     the shelf never grows a grey bar. */
+  .covers {
+    @apply flex w-full snap-x snap-proximity select-none gap-4 overflow-x-auto px-4 pb-1;
+    cursor: grab;
+    /* Snapping measures from the snapport, so tell it about the inset or the
+       first cover gets pulled flush against the window edge. */
+    scroll-padding-left: 1rem;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .covers.dragging {
+    cursor: grabbing;
+    /* Snapping would fight the pointer mid-drag. */
+    scroll-snap-type: none;
+  }
+  .covers.dragging img {
+    pointer-events: none;
+  }
+  .covers::-webkit-scrollbar {
+    @apply hidden h-0 w-0;
+  }
+  .covers li {
+    @apply w-[14.5rem] shrink-0 snap-start sm:w-[18rem];
+  }
+  .cover-link {
+    @apply flex flex-col gap-1.5 no-underline;
+  }
+  .cover {
+    @apply h-auto w-full rounded-sm border border-skin-base/15 object-cover
+      shadow-md transition-transform duration-200;
+    aspect-ratio: 2 / 3;
+  }
+  .cover-link:hover .cover,
+  .cover-link:focus-visible .cover {
+    @apply -translate-y-1 shadow-lg;
+  }
+  /* Clamp so a long subtitle cannot shove one caption below its neighbours.
+     The full title stays in the link's alt text, tooltip and detail page. */
+  .cover-title {
+    @apply line-clamp-2 text-sm leading-snug;
+  }
+  .cover-link:hover .cover-title {
+    @apply text-skin-accent;
+  }
+  .cover-author {
+    @apply text-xs opacity-60;
+  }
+
+  .plain-list {
+    @apply divide-y divide-skin-base/15 border-y border-skin-base/15;
+  }
+  .plain-row {
+    @apply flex items-baseline justify-between gap-4 py-3;
+  }
+  .plain-link {
+    @apply flex flex-col gap-0.5 no-underline hover:text-skin-accent;
+  }
+  .plain-title {
+    @apply font-semibold;
+  }
+  .plain-author,
+  .plain-year {
+    @apply text-sm opacity-70;
+  }
+  .empty {
+    @apply mt-8 opacity-70;
+  }
+  .empty code {
+    @apply rounded bg-skin-card px-2 py-1 font-mono text-sm;
+  }
+</style>
+
+<script>
+  /**
+   * The cover rows have no scrollbar, so give them the inputs a bar would:
+   * wheel (vertical intent becomes sideways travel), pointer drag, and the
+   * arrow keys that come free with focusable links. Touch already works.
+   */
+  function mountShelves() {
+    document.querySelectorAll<HTMLElement>(".covers").forEach(row => {
+      if (row.dataset.scrollWired) return;
+      row.dataset.scrollWired = "true";
+
+      row.addEventListener(
+        "wheel",
+        event => {
+          // Leave real horizontal input (trackpad, tilt wheel) to the browser.
+          if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+          const max = row.scrollWidth - row.clientWidth;
+          if (max <= 1) return;
+          const atStart = event.deltaY < 0 && row.scrollLeft <= 0;
+          const atEnd = event.deltaY > 0 && row.scrollLeft >= max - 1;
+          // At either end the page should keep scrolling, not stall here.
+          if (atStart || atEnd) return;
+          event.preventDefault();
+          row.scrollLeft += event.deltaY;
+        },
+        { passive: false }
+      );
+
+      let dragging = false;
+      let startX = 0;
+      let startLeft = 0;
+      let travelled = 0;
+
+      // The browser's own image drag would swallow the gesture otherwise.
+      row.addEventListener("dragstart", event => event.preventDefault());
+
+      row.addEventListener("pointerdown", event => {
+        if (event.pointerType === "touch" || event.button !== 0) return;
+        // No preventDefault here: that would cancel the compatibility mouse
+        // events too, and a plain click would stop opening the book.
+        dragging = true;
+        travelled = 0;
+        startX = event.clientX;
+        startLeft = row.scrollLeft;
+        row.classList.add("dragging");
+      });
+
+      row.addEventListener("pointermove", event => {
+        if (!dragging) return;
+        const dx = event.clientX - startX;
+        travelled = Math.max(travelled, Math.abs(dx));
+        if (travelled > 4) {
+          try {
+            row.setPointerCapture(event.pointerId);
+          } catch {
+            /* pointer already gone; the window listeners below still finish it */
+          }
+        }
+        row.scrollLeft = startLeft - dx;
+      });
+
+      const endDrag = (event: PointerEvent) => {
+        if (!dragging) return;
+        dragging = false;
+        row.classList.remove("dragging");
+        try {
+          row.releasePointerCapture(event.pointerId);
+        } catch {
+          /* nothing captured */
+        }
+      };
+      row.addEventListener("pointerup", endDrag);
+      row.addEventListener("pointercancel", endDrag);
+      // Releasing outside the row must still end the drag.
+      window.addEventListener("pointerup", endDrag);
+
+      // A drag that ends on a cover must not count as a click on its link.
+      row.addEventListener(
+        "click",
+        event => {
+          if (travelled > 6) {
+            event.preventDefault();
+            event.stopPropagation();
+          }
+          travelled = 0;
+        },
+        true
+      );
+    });
+  }
+
+  mountShelves();
+  document.addEventListener("astro:after-swap", mountShelves);
+</script>
