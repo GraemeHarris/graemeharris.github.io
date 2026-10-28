@@ -33,6 +33,9 @@ jobs:
         uses: withastro/action@v3
         with:
           package-manager: yarn@4.12.0
+          # The action installs its own Node (20 by default), overriding the
+          # setup-node step above; Astro 6 needs >= 22.12.
+          node-version: 22
           # path: . # The root location of your Astro project inside the repository. (optional)
           # package-manager: pnpm@latest # The Node package manager that should be used to install dependencies and build your site. Automatically detected based on your lockfile. (optional)
 
