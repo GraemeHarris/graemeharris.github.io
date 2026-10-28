@@ -5,6 +5,10 @@
  * own opacity and a slight breath in size — the rhombi are never distorted. The
  * lower rows fade out. Purely ornamental: aria-hidden, and a flat static frame
  * under prefers-reduced-motion.
+ *
+ * Once the page is idle, and only where WebGL2 exists, a watercolour painting
+ * of the same tiling (penroseWatercolour.ts) is loaded and crossfaded in; the
+ * blobs then reveal paint instead of ink. Without it the ink version stays.
  */
 ---
 
@@ -36,15 +40,15 @@
 </style>
 
 <script>
+  import type { PaintTile } from "./penroseWatercolour";
+
   const PHI = (1 + Math.sqrt(5)) / 2;
   const INV_PHI = 1 / PHI;
 
   type Pt = { x: number; y: number };
   type Tri = { t: number; a: Pt; b: Pt; c: Pt };
   /** A rhombus: its four corners, its centre, and when it fades in. */
-  type Tile = {
-    xs: number[];
-    ys: number[];
+  type Tile = PaintTile & {
     cx: number;
     cy: number;
     delay: number;
@@ -224,6 +228,8 @@
         ys: corners.map(p => p.y),
         cx: mx,
         cy: my,
+        ring: dist / maxDist,
+        thick: tr.t === 0,
         delay: (dist / maxDist) * 1.05 + hash01(mx, my) * 0.2,
         // The lower rows fade away rather than stopping flat.
         fade: 1 - smoothstep(0.42, 1, my / h),
@@ -249,6 +255,33 @@
   // between two neighbours is never drawn twice into the same alpha.
   const EDGE_BANDS = 8;
 
+  // Where the watercolour sits under a blob: a faint floor everywhere, near
+  // full paint at a blob's heart.
+  const WASH_FLOOR = 0.12;
+  const WASH_RANGE = 0.85;
+  const WASH_FADE_MS = 1200;
+
+  /** Checked before the watercolour chunk is fetched, so it never downloads in vain. */
+  let webgl2: boolean | undefined;
+  const hasWebGL2 = () => {
+    if (webgl2 === undefined) {
+      try {
+        const gl = document.createElement("canvas").getContext("webgl2");
+        webgl2 = !!gl;
+        gl?.getExtension("WEBGL_lose_context")?.loseContext();
+      } catch {
+        webgl2 = false;
+      }
+    }
+    return webgl2;
+  };
+
+  const whenIdle = (fn: () => void) =>
+    // Safari has no requestIdleCallback.
+    typeof window.requestIdleCallback === "function"
+      ? window.requestIdleCallback(fn, { timeout: 2000 })
+      : setTimeout(fn, 300);
+
   let teardown: (() => void) | null = null;
 
   function mount() {
@@ -267,6 +300,10 @@
     let side = 30;
     let w = 0;
     let h = 0;
+    let dpr = 1;
+    let wash: CanvasPattern | null = null;
+    let washAt = 0;
+    let alive = true;
     let ink: [number, number, number] = [40, 39, 40];
     let inkFloor = 0.05;
     let inkRange = 0.15;
@@ -288,7 +325,7 @@
 
     function resize() {
       const rect = canvas!.getBoundingClientRect();
-      const dpr = Math.min(2, window.devicePixelRatio || 1);
+      dpr = Math.min(2, window.devicePixelRatio || 1);
       w = Math.round(rect.width);
       h = Math.round(rect.height);
       canvas!.width = Math.max(1, Math.round(w * dpr));
@@ -297,6 +334,29 @@
       side = Math.min(36, Math.max(18, h / 4.6));
       tiles = buildTiles(w, h, side);
       blobs = makeBlobs(w, h);
+    }
+
+    /**
+     * Paint (or fetch from cache) the watercolour for the current size and
+     * theme. Any failure leaves the ink version in place.
+     */
+    async function refreshWash() {
+      try {
+        const mod = await import("./penroseWatercolour");
+        if (!alive) return;
+        const dark = document.documentElement.dataset.theme === "dark";
+        const painting = mod.watercolour(tiles, w, h, dpr, dark);
+        if (!alive) return;
+        const pattern = ctx!.createPattern(painting, "no-repeat");
+        if (!pattern) return;
+        pattern.setTransform(new DOMMatrix().scale(1 / dpr));
+        // Crossfade only the first arrival; size and theme swaps are instant.
+        if (!wash) washAt = performance.now();
+        wash = pattern;
+        if (reduced || !visible) draw(performance.now());
+      } catch {
+        // No WebGL2 context, or the chunk failed to load: keep the ink.
+      }
     }
 
     function draw(now: number) {
@@ -326,6 +386,13 @@
         bw.push(blob.weight * (0.7 + 0.3 * Math.sin(t * blob.sw + blob.pw)));
       }
 
+      // 0 while only ink exists, rising to 1 as the watercolour fades in.
+      const mix = !wash
+        ? 0
+        : reduced
+          ? 1
+          : Math.min(1, (now - washAt) / WASH_FADE_MS);
+
       const edgeBands: Path2D[] = [];
       for (let i = 0; i < EDGE_BANDS; i++) edgeBands.push(new Path2D());
 
@@ -346,8 +413,11 @@
         const lit = 1 - Math.exp(-field * 1.9);
         const life = lit * tile.fade * eased;
 
-        const alpha = inkFloor + inkRange * life;
-        if (alpha < 0.004) continue;
+        const alpha = (inkFloor + inkRange * life) * (1 - mix);
+        const paint =
+          Math.min(1, (WASH_FLOOR * tile.fade + WASH_RANGE * life) * eased) *
+          mix;
+        if (alpha < 0.004 && paint < 0.004) continue;
 
         // Full size, true rhombus: only the opacity moves.
         const path = new Path2D();
@@ -357,15 +427,24 @@
         path.lineTo(tile.xs[3], tile.ys[3]);
         path.closePath();
 
-        ctx!.fillStyle = `rgba(${r},${g},${b},${alpha.toFixed(4)})`;
-        ctx!.fill(path);
+        if (alpha >= 0.004) {
+          ctx!.fillStyle = `rgba(${r},${g},${b},${alpha.toFixed(4)})`;
+          ctx!.fill(path);
+        }
+        if (paint >= 0.004) {
+          ctx!.globalAlpha = paint;
+          ctx!.fillStyle = wash!;
+          ctx!.fill(path);
+          ctx!.globalAlpha = 1;
+        }
         edgeBands[
           Math.min(EDGE_BANDS - 1, Math.floor(life * EDGE_BANDS))
         ].addPath(path);
       }
 
-      for (let i = 0; i < EDGE_BANDS; i++) {
-        const a = edgeAlpha * ((i + 0.5) / EDGE_BANDS);
+      // The paint carries its own edges, so the ink outlines bow out with it.
+      for (let i = 0; i < EDGE_BANDS && mix < 1; i++) {
+        const a = edgeAlpha * ((i + 0.5) / EDGE_BANDS) * (1 - mix);
         if (a < 0.004) continue;
         ctx!.strokeStyle = `rgba(${r},${g},${b},${a.toFixed(4)})`;
         ctx!.stroke(edgeBands[i]);
@@ -390,6 +469,8 @@
     resize();
     if (reduced) draw(performance.now());
     else play();
+    const useWash = hasWebGL2();
+    if (useWash) whenIdle(refreshWash);
 
     let resizeTimer = 0;
     const onResize = () => {
@@ -400,6 +481,7 @@
           return;
         resize();
         if (reduced || !visible) draw(performance.now());
+        if (useWash) refreshWash();
       }, 160);
     };
     window.addEventListener("resize", onResize);
@@ -407,6 +489,7 @@
     const themeObserver = new MutationObserver(() => {
       readPalette();
       if (reduced || !visible) draw(performance.now());
+      if (useWash && wash) refreshWash();
     });
     themeObserver.observe(document.documentElement, {
       attributes: true,
@@ -422,6 +505,7 @@
     io.observe(canvas);
 
     teardown = () => {
+      alive = false;
       pause();
       window.clearTimeout(resizeTimer);
       window.removeEventListener("resize", onResize);

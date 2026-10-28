@@ -3938,6 +3938,7 @@ __metadata:
     katex: "npm:^0.16.45"
     lint-staged: "npm:^16.4.0"
     node-vibrant: "npm:^3.2.1-alpha.1"
+    p5.brush: "npm:3.0.0"
     prettier: "npm:^3.8.3"
     prettier-plugin-astro: "npm:^0.14.1"
     prettier-plugin-tailwindcss: "npm:^0.7.3"
@@ -8680,6 +8681,17 @@ __metadata:
   languageName: node
   linkType: hard
 
+"p5.brush@npm:3.0.0":
+  version: 3.0.0
+  resolution: "p5.brush@npm:3.0.0"
+  dependencies:
+    simplex-noise: "npm:^4.0.3"
+  peerDependencies:
+    p5: ^2.2
+  checksum: 10c0/9aa7fe72d0fa7e35a4e6ba4db56d20ee60c3a0f7a67cf7e63a3d9e155a8c9c3ab8e3378ed26742a81cfb334005f8d8a5fe86ddb75a46651e56d8eb2edfbcf249
+  languageName: node
+  linkType: hard
+
 "package-json-from-dist@npm:^1.0.0":
   version: 1.0.1
   resolution: "package-json-from-dist@npm:1.0.1"
@@ -10192,6 +10204,13 @@ __metadata:
   dependencies:
     is-arrayish: "npm:^0.3.1"
   checksum: 10c0/df5e4662a8c750bdba69af4e8263c5d96fe4cd0f9fe4bdfa3cbdeb45d2e869dff640beaaeb1ef0e99db4d8d2ec92f85508c269f50c972174851bc1ae5bd64308
+  languageName: node
+  linkType: hard
+
+"simplex-noise@npm:^4.0.3":
+  version: 4.0.3
+  resolution: "simplex-noise@npm:4.0.3"
+  checksum: 10c0/117b7f85abd90f3dc63817ed790705ff0fb50cb0bf396a8fc8fa1443265e4b2529429bb34992e43e7b27d6cacb9059f37fa52a37e59c52f51698ad0d3038d0f3
   languageName: node
   linkType: hard
 
